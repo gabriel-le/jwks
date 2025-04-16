@@ -29,7 +29,12 @@ impl Jwks {
     /// # Arguments
     /// * `oidc_url` - The url with OpenID configuration, e.g. https://accounts.google.com/.well-known/openid-configuration
     pub async fn from_oidc_url(oidc_url: impl Into<String>) -> Result<Self, JwksError> {
-        Self::from_oidc_url_with_client(&reqwest::Client::default(), oidc_url).await
+        Self::from_oidc_url_with_client_and_default_key_alg(
+            &reqwest::Client::default(),
+            oidc_url.into(),
+            None,
+        )
+        .await
     }
 
     /// A version of [`from_oidc_url`][Self::from_oidc_url] that allows for
@@ -37,6 +42,33 @@ impl Jwks {
     pub async fn from_oidc_url_with_client(
         client: &reqwest::Client,
         oidc_url: impl Into<String>,
+    ) -> Result<Self, JwksError> {
+        Self::from_oidc_url_with_client_and_default_key_alg(client, oidc_url, None).await
+    }
+
+    /// A version of [`from_oidc_url`][Self::from_oidc_url] that allows for
+    /// passing a default [`KeyAlgorithm`][jsonwebtoken::jwk::KeyAlgorithm] to use
+    /// if the key does not specify one.
+    pub async fn from_oidc_url_with_default_key_alg(
+        oidc_url: impl Into<String>,
+        default_alg: Option<KeyAlgorithm>,
+    ) -> Result<Self, JwksError> {
+        Self::from_oidc_url_with_client_and_default_key_alg(
+            &reqwest::Client::default(),
+            oidc_url,
+            default_alg,
+        )
+        .await
+    }
+
+    /// A version of [`from_oidc_url`][Self::from_oidc_url] that allows for
+    /// passing in a custom [`Client`][reqwest::Client] and a default
+    /// [`KeyAlgorithm`][jsonwebtoken::jwk::KeyAlgorithm] to use if the key
+    /// does not specify one.
+    pub async fn from_oidc_url_with_client_and_default_key_alg(
+        client: &reqwest::Client,
+        oidc_url: impl Into<String>,
+        default_alg: Option<KeyAlgorithm>,
     ) -> Result<Self, JwksError> {
         let oidc_config = client
             .get(oidc_url.into())
@@ -46,13 +78,18 @@ impl Jwks {
             .await?;
         let jwks_uri = oidc_config.jwks_uri;
 
-        Self::from_jwks_url_with_client(&reqwest::Client::default(), &jwks_uri).await
+        Self::from_jwks_url_with_client_and_default_key_alg(client, &jwks_uri, default_alg).await
     }
 
     /// # Arguments
     /// * `jwks_url` - The url which JWKS info is pulled from, e.g. https://www.googleapis.com/oauth2/v3/certs
     pub async fn from_jwks_url(jwks_url: impl Into<String>) -> Result<Self, JwksError> {
-        Self::from_jwks_url_with_client(&reqwest::Client::default(), jwks_url.into()).await
+        Self::from_jwks_url_with_client_and_default_key_alg(
+            &reqwest::Client::default(),
+            jwks_url.into(),
+            None,
+        )
+        .await
     }
 
     /// A version of [`from_jwks_url`][Self::from_jwks_url] that allows for
@@ -60,6 +97,30 @@ impl Jwks {
     pub async fn from_jwks_url_with_client(
         client: &reqwest::Client,
         jwks_url: impl Into<String>,
+    ) -> Result<Self, JwksError> {
+        Self::from_jwks_url_with_client_and_default_key_alg(client, jwks_url, None).await
+    }
+
+    pub async fn from_jwks_url_with_default_key_alg(
+        jwks_url: impl Into<String>,
+        default_alg: Option<KeyAlgorithm>,
+    ) -> Result<Self, JwksError> {
+        Self::from_jwks_url_with_client_and_default_key_alg(
+            &reqwest::Client::default(),
+            jwks_url,
+            default_alg,
+        )
+        .await
+    }
+
+    /// A version of [`from_jwks_url`][Self::from_jwks_url] that allows for
+    /// passing in a custom [`Client`][reqwest::Client] and a default
+    /// [`KeyAlgorithm`][jsonwebtoken::jwk::KeyAlgorithm] to use if the key
+    /// does not specify one.
+    pub async fn from_jwks_url_with_client_and_default_key_alg(
+        client: &reqwest::Client,
+        jwks_url: impl Into<String>,
+        default_alg: Option<KeyAlgorithm>,
     ) -> Result<Self, JwksError> {
         let jwks: jwk::JwkSet = client.get(jwks_url.into()).send().await?.json().await?;
 
@@ -75,9 +136,12 @@ impl Jwks {
                             error: err,
                         })?;
 
-                    let alg = jwk.common.key_algorithm.ok_or(JwkError::MissingAlgorithm {
-                        key_id: kid.clone(),
-                    })?;
+                    let alg = match jwk.common.key_algorithm {
+                        Some(alg) => alg,
+                        None => default_alg.ok_or(JwkError::MissingAlgorithm {
+                            key_id: kid.clone(),
+                        })?,
+                    };
 
                     keys.insert(
                         kid,
@@ -114,7 +178,7 @@ impl Jwks {
                                 error: err,
                             }
                         })?;
-                    
+
                     let alg = jwk.common.key_algorithm.ok_or(JwkError::MissingAlgorithm {
                         key_id: kid.clone(),
                     })?;
